@@ -1,0 +1,18 @@
+from arch.carbon_footprint_agent import CarbonFootprintAgent
+# Import other agents similarly...
+
+class Orchestrator:
+    def __init__(self, project, location):
+        self.project = project
+        self.location = location
+        self.agents = {
+            "carbon": CarbonFootprintAgent(project, location),
+            # Add other agents here...
+        }
+
+    def run(self, data_dict):
+        results = {}
+        for name, agent in self.agents.items():
+            agent.perceive(data_dict[name])
+            results[name] = agent.reason()
+        return results

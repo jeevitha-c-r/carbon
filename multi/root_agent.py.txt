@@ -1,0 +1,209 @@
+import pandas as pd
+from google.cloud import aiplatform
+from vertexai.language_models import TextEmbeddingModel, TextGenerationModel
+from google.cloud import storage
+from io import StringIO
+import pandas as pd
+import os
+from dotenv import load_dotenv
+from google.adk import Agent
+from google.adk.agents import SequentialAgent, LoopAgent, ParallelAgent
+from google.adk.tools.tool_context import ToolContext
+from google.adk.tools.langchain_tool import LangchainTool  # import
+# from google.adk.tools.crewai_tool import CrewaiTool
+from google.genai import types
+
+# from langchain_community.tools import WikipediaQueryRun
+# from langchain_community.utilities import WikipediaAPIWrapper
+# from crewai_tools import FileWriterTool
+
+# Load variables from .env file
+load_dotenv()
+
+# Access the variables
+project = os.getenv("GOOGLE_CLOUD_PROJECT")
+location = os.getenv("GOOGLE_CLOUD_LOCATION")
+model = os.getenv("MODEL")
+
+print(f"Project: {project}, Location: {location}")
+def read_csv_from_gcs(bucket_name, blob_name):
+    # Initialize a GCS client
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    # Download the CSV file as a string
+    csv_data = blob.download_as_text()
+    # Read into pandas DataFrame
+    df = pd.read_csv(StringIO(csv_data))
+    print(df)
+    return df
+
+# --- Embedding Generation ---
+def generate_embeddings(texts):
+    model = TextEmbeddingModel.from_pretrained("textembedding-gecko@001")
+    embeddings = model.get_embeddings(texts)
+    return [e.values for e in embeddings]
+
+# --- Vector Search Query ---
+def query_vertex_vector_search(index_endpoint, deployed_index_id, query_embedding, project, location, top_k=5):
+    vertexai.init(project="hacker2025-team-78-dev", location="us-central1")
+    endpoint = aiplatform.MatchingEngineIndexEndpoint(index_endpoint)
+    response = endpoint.match(
+        deployed_index_id=deployed_index_id,
+        queries=[query_embedding],
+        num_neighbors=top_k,
+    )
+    return response
+
+# --- LLM Call ---
+def call_vertex_llm(prompt, project, location):
+    aiplatform.init(project="hacker2025-team-78-dev", location="us-central1")
+    model = TextGenerationModel.from_pretrained("text-bison")
+    response = model.predict(prompt)
+    return response.text
+
+# --- Base Agent ---
+class BaseAgent:
+    def __init__(self, name, project, location, index_endpoint, deployed_index_id):
+        self.name = name
+        self.project = project
+        self.location = location
+        self.index_endpoint = index_endpoint
+        self.deployed_index_id = deployed_index_id
+        self.data = None
+
+    def perceive(self, data):
+        self.data = data
+
+    def reason(self, query_text):
+        embedding = generate_embeddings([query_text])[0]
+        matches = query_vertex_vector_search(
+            self.index_endpoint,
+            self.deployed_index_id,
+            embedding,
+            self.project,
+            self.location
+        )
+        self.result = matches
+
+    def act(self):
+        return self.result
+
+# --- Example: Carbon Footprint Agent ---
+class CarbonFootprintAgent(BaseAgent):
+    def reason(self, query_text):
+        # Optionally, add agent-specific prompt engineering here
+        super().reason(query_text)
+
+# --- Orchestration Agent ---
+class OrchestrationAgent:
+    def __init__(self, agents):
+        self.agents = agents
+
+    def run(self, queries):
+        results = {}
+        for name, agent in self.agents.items():
+            agent.reason(queries[name])
+            results[name] = agent.act()
+        # Collate results and use LLM for summary
+        summary_prompt = "Summarize the following sustainability insights:\n"
+        for name, res in results.items():
+            summary_prompt += f"{name} Agent: {str(res)}\n"
+        summary = call_vertex_llm(summary_prompt, agent.project, agent.location)
+        return results, summary
+
+# --- Main Pipeline ---
+import vertexai
+def main():
+    
+    vertexai.init(project="hacker2025-team-78-dev", location="us-central1")
+    PROJECT = "hacker2025-team-78-dev"
+    # vertexai.init(project="hacker2025-team-78-dev", location="us-central1")
+   
+    LOCATION = "us-central1"
+    INDEX_ENDPOINT = "projects/280605254251/locations/us-central1/indexEndpoints/8729420836122918912"
+    # INDEX_ENDPOINT = "projects/hacker2025-team-78-dev/locations/us-central1/indexEndpoints/2293988074843013120"
+    DEPLOYED_INDEX_ID="orchestration_1750569220772"
+    # PROJECT = "your-gcp-project"
+    # LOCATION = "us-central1"
+    # INDEX_ENDPOINT = "projects/PROJECT_ID/locations/LOCATION/indexEndpoints/INDEX_ENDPOINT_ID"
+    # DEPLOYED_INDEX_ID = "your-deployed-index-id"
+
+    # Load and preprocess data (example for carbon agent)
+    bucket_name = 'the-orchestrators'
+    carbon_df = read_csv_from_gcs(bucket_name,'LandingLayer/carbon_emissions/carbon_emissions.csv')
+    
+    # ...load other agent data...
+
+#     from google.cloud import aiplatform_v1
+
+# # Set variables for the current deployed index.
+# API_ENDPOINT="511912213.us-central1-280605254251.vdb.vertexai.goog"
+# INDEX_ENDPOINT="projects/280605254251/locations/us-central1/indexEndpoints/8729420836122918912"
+# DEPLOYED_INDEX_ID="orchestration_1750569220772"
+
+# Configure Vector Search client
+# client_options = {
+#   "api_endpoint": API_ENDPOINT
+# }
+# vector_search_client = aiplatform_v1.MatchServiceClient(
+#   client_options=client_options,
+# )
+
+# # Bufrom google.cloud import aiplatform_v1
+
+# datapoint = aiplatform_v1.IndexDatapoint(
+#     feature_vector=[0.123, 0.456, 0.789, ...]  # Replace with your actual embedding values
+# )ild FindNeighborsRequest object
+# datapoint = aiplatform_v1.IndexDatapoint(
+#   feature_vector="<FEATURE_VECTOR>"
+# )
+
+# query = aiplatform_v1.FindNeighborsRequest.Query(
+#   datapoint=datapoint,
+
+#   # The number of nearest neighbors to be retrieved
+#   neighbor_count=10
+# )
+# request = aiplatform_v1.FindNeighborsRequest(
+#   index_endpoint=INDEX_ENDPOINT,
+#   deployed_index_id=DEPLOYED_INDEX_ID,
+#   # Request can have multiple queries
+#   queries=[query],
+#   return_full_datapoint=False,
+# )
+
+# # Execute the request
+# response = vector_search_client.find_neighbors(request)
+
+# # Handle the response
+# print(response)
+
+    # Instantiate agents
+    agents = {
+        "carbon": CarbonFootprintAgent("Carbon Footprint", PROJECT, LOCATION, INDEX_ENDPOINT, DEPLOYED_INDEX_ID),
+        # Add other agents here...
+    }
+    agents["carbon"].perceive(carbon_df)
+    # agents["energy"].perceive(energy_df) ...
+    # agents["waste"].perceive(waste_df) ...
+    # agents["procurement"].perceive(procurement_df) ...
+    # agents["esg"].perceive(esg_df) ...
+
+    # Define queries for each agent
+    queries = {
+        "carbon": "Show me emission hotspots for the last quarter",
+        # Add queries for other agents...
+    }
+
+    orchestrator = OrchestrationAgent(agents)
+    results, summary = orchestrator.run(queries)
+
+    print("=== Individual Agent Results ===")
+    for name, res in results.items():
+        print(f"{name.upper()} AGENT RESULT:\n{res}\n")
+    print("=== Collated LLM Summary ===")
+    print(summary)
+
+if __name__ == "__main__":
+    main()
